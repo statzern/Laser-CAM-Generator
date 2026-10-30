@@ -1,0 +1,4 @@
+.DS_Store
+tests/out-*.nc
+node_modules/
+.claude/

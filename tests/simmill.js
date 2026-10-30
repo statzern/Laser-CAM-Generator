@@ -1,0 +1,11 @@
+globalThis.ClipperLib = require('../vendor/clipper.js');
+for (const f of ['gerber', 'toolpath', 'gcode', 'excellon', 'mill', 'gsim']) require('../js/' + f + '.js');
+const LG = globalThis.LG, fs = require('fs'), path = require('path'), S = path.join(__dirname, '../samples/');
+const gb = LG.parseGerber(fs.readFileSync(S + 'Gerber_TopLayer.GTL', 'utf8'));
+const dr = [S + 'Drill_PTH_Through.DRL', S + 'Drill_PTH_Through_Via.DRL'].map((f) => LG.parseExcellon(fs.readFileSync(f, 'utf8')));
+const extra = { drill: { hits: dr.flatMap((d) => d.hits), slots: [] }, outline: LG.parseGerber(fs.readFileSync(S + 'Gerber_BoardOutlineLayer.GKO', 'utf8')) };
+const P = Object.assign({}, LG.defaults, { process: 'mill' });
+const mr = LG.generateMill(LG.prepare(gb, P), extra, P);
+const sim = LG.simulate(Object.keys(mr.jobs).map((k) => ({ name: k, text: mr.jobs[k].gcode })), { rapid: P.rapid });
+console.log('jobs', sim.jobNames, 'minZ', [...sim.jobMinZ].map((z) => z.toFixed(2)), 'segs', sim.n, 'kind', sim.kind, 'time', (sim.total / 60).toFixed(1), 'min');
+console.log('engine iso', mr.stats.iso.len.toFixed(0), 'outline', mr.stats.outline.len.toFixed(0), '| sim cut total', sim.cutLen.toFixed(0), 'warn', sim.warnings);

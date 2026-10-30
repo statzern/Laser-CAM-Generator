@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laser Gen</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header>
+  <h1>Laser Gen <span>Gerber &rarr; laser G-code</span></h1>
+  <label class="btn" for="file">Open Gerber&hellip;</label>
+  <input id="file" type="file" hidden>
+  <button id="demo" class="btn ghost">Load demo</button>
+  <label class="btn ghost" for="gfile" title="Preview any G-code file (e.g. from FlatCAM)">Preview G-code&hellip;</label><input id="gfile" type="file" hidden>
+  <span id="fname" class="muted"></span>
+  <label class="btn ghost millonly" for="drillfile">Drill&hellip;</label><input id="drillfile" type="file" multiple hidden>
+  <label class="btn ghost millonly" for="outfile">Outline&hellip;</label><input id="outfile" type="file" hidden>
+  <span id="fname2" class="muted millonly"></span>
+  <span class="spacer"></span>
+  <label class="chk"><input id="auto" type="checkbox" checked> Auto-update</label>
+  <button id="gen" class="btn">Generate</button>
+  <button id="save" class="btn primary laseronly" disabled>Download G-code</button>
+  <button id="dl-iso" class="btn primary millonly" disabled>Isolation .nc</button>
+  <button id="dl-drill" class="btn primary millonly" disabled>Drill .nc</button>
+  <button id="dl-out" class="btn primary millonly" disabled>Outline .nc</button>
+  <button id="dl-pads" class="btn primary millonly" disabled>Pads .nc</button>
+</header>
+
+<main>
+  <aside id="side">
+    <div id="form"></div>
+    <div class="profile">
+      <button id="prof-save" class="btn ghost">Save profile</button>
+      <label class="btn ghost" for="prof-load">Load profile</label>
+      <input id="prof-load" type="file" accept=".json" hidden>
+      <button id="prof-reset" class="btn ghost">Reset</button>
+    </div>
+  </aside>
+
+  <section id="stage">
+    <div id="layers">
+      <label><input type="checkbox" data-layer="copper" checked> Copper</label>
+      <label><input type="checkbox" data-layer="clear" checked> Clear area</label>
+      <label><input type="checkbox" data-layer="keepout"> Keep-out</label>
+      <label><input type="checkbox" data-layer="zones" checked> Derated zones</label>
+      <label><input type="checkbox" data-layer="path" checked> Toolpath</label>
+      <label><input type="checkbox" data-layer="gaps" checked> Narrow gaps</label>
+      <label class="millonly"><input type="checkbox" data-layer="iso" checked> Isolation</label>
+      <label class="millonly"><input type="checkbox" data-layer="holes" checked> Holes</label>
+      <label class="millonly"><input type="checkbox" data-layer="outline" checked> Outline</label>
+      <label><input type="checkbox" data-layer="rapid"> Rapids</label>
+      <label class="laseronly"><input type="checkbox" data-layer="dir"> Direction</label>
+      <button id="fit" class="btn ghost small">Fit</button>
+    </div>
+    <canvas id="cv"></canvas>
+    <div id="drop">Drop a Gerber file here</div>
+    <div id="readout"></div>
+    <div id="legend"><canvas id="lg" width="160" height="10"></canvas><div><span id="lg-lo">0%</span><span id="lg-hi">100%</span></div></div>
+    <div id="live"></div>
+    <div id="scrub"><button id="play" class="btn ghost small">&#9654;</button><input id="scr" type="range" min="0" max="1000" value="1000"><select id="spd" title="Playback speed"><option value="1">1&times;</option><option value="10">10&times;</option><option value="50">50&times;</option><option value="200" selected>200&times;</option><option value="1000">1000&times;</option></select><span id="scr-l"></span></div>
+  </section>
+
+  <aside id="info">
+    <h2>Result</h2>
+    <dl id="stats"></dl>
+    <h2>Power distribution <small>(by path length)</small></h2>
+    <canvas id="hist" width="260" height="90"></canvas>
+    <h2>Messages</h2>
+    <ul id="msgs"></ul>
+    <h2>G-code <button id="togg" class="btn ghost small">Show</button></h2>
+    <pre id="gcode" hidden></pre>
+  </aside>
+</main>
+
+<script src="vendor/clipper.js"></script>
+<script src="js/gerber.js"></script>
+<script src="js/toolpath.js"></script>
+<script src="js/gcode.js"></script>
+<script src="js/gsim.js"></script>
+<script src="js/testcard.js"></script>
+<script src="js/excellon.js"></script>
+<script src="js/mill.js"></script>
+<script src="js/sample.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
