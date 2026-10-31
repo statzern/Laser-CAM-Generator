@@ -40,7 +40,8 @@
     isoOverlap: 0.2,
     fillIslands: true, // hatch away resist strips / specks left between isolation passes
     fillWidth: 0.3, // mm, leftover resist strips narrower than this are cleared
-    fillMinArea: 0.5, // mm^2, leftover resist regions smaller than this are cleared
+    fillMaxArea: 0.5, // mm^2, enclosed pockets of leftover resist up to this size are cleared
+    fillIgnore: 0.02, // mm^2, leftover pieces smaller than this are ignored (corner blips)
     // motion / power
     feed: 1500, // mm/min
     rapid: 3000, // mm/min, only for time estimate
@@ -503,12 +504,17 @@
       const opened = offsetPaths(offsetPaths(left, -w2), w2);
       const narrow = LG.clip(CL.ClipType.ctDifference, left, offsetPaths(opened, 0.005));
       const specks = [];
-      for (const g of groups(left)) if (g.area < P.fillMinArea) specks.push(...g.paths);
+      for (const g of groups(left)) if (g.area < P.fillMaxArea) specks.push(...g.paths);
       // grow so a strip thinner than the line spacing still gets a scan line; never into the copper standoff
       const lw0 = lineWidthAt(P, (P.angle * Math.PI) / 180);
       const grow = Math.max(0.02, P.autoSpacing ? (P.spacingPct / 100) * lw0 : P.spacing); // wide enough that a scan line always lands in it
+      // a piece smaller than fillIgnore is a corner blip, not a strip worth a burn of its own
+      const pieces = groups(LG.clip(CL.ClipType.ctUnion, narrow, specks));
+      res.fillAreas = pieces.map((g) => g.area);
+      const keep = pieces.filter((g) => g.area >= P.fillIgnore).flatMap((g) => g.paths);
+      res.stats.fillIgnored = pieces.length - groups(keep).length;
       const fill = LG.clip(CL.ClipType.ctDifference,
-        offsetPaths(LG.clip(CL.ClipType.ctUnion, narrow, specks), grow), offsetEll(copper, rx0, ry0, 1));
+        offsetPaths(keep, grow), offsetEll(copper, rx0, ry0, 1));
       const fp = groups(fill).filter((g) => g.area > 0.002);
       fp.forEach((g) => (g.s = 1));
       res.fillRegion = fp.flatMap((g) => g.paths);
@@ -577,9 +583,10 @@
     }
 
     res.cuts = cuts;
-    const fillCount = res.stats && res.stats.fillPatches;
+    const fillCount = res.stats && res.stats.fillPatches, fillIgn = res.stats && res.stats.fillIgnored;
     res.stats = LG.stats(cuts, P);
     res.stats.fillPatches = fillCount || 0;
+    res.stats.fillIgnored = fillIgn || 0;
     res.stats.islands = res.islands.length;
     res.stats.derated = res.islands.filter((i) => i.s < 0.9999).length;
     res.stats.genMs = Math.round((performance.now ? performance.now() : Date.now()) - t0);

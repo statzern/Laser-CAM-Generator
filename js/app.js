@@ -41,8 +41,9 @@
     ] },
     { title: 'Leftover islands', proc: 'laser', open: true, show: (p) => isAround(p) && (isIso(p) || (isClear(p) && p.clearStyle === 'contour')), fields: [
       { k: 'fillIslands', l: 'Clear leftover islands', t: 'check', show: isAround, h: 'Resist strips and specks the passes leave between neighbouring features are hatched away so they cannot hold stray copper.' },
-      { k: 'fillWidth', l: 'Strip width to clear', u: 'mm', step: 0.05, min: 0.05, show: (p) => isAround(p) && p.fillIslands, h: 'Leftover resist narrower than this is cleared. Use at least one spot width.' },
-      { k: 'fillMinArea', l: 'Speck area to clear', u: 'mm²', step: 0.1, min: 0, show: (p) => isAround(p) && p.fillIslands, h: 'Any leftover resist region smaller than this is cleared.' },
+      { k: 'fillIgnore', l: 'Ignore leftovers smaller than', u: 'mm²', step: 0.005, min: 0, show: (p) => isAround(p) && p.fillIslands, h: 'Leftover pieces below this area are skipped: corner blips and specks too small to matter. Raise it if you still see many tiny patches; lower it if thin strips are left behind.' },
+      { k: 'fillWidth', l: 'Widest strip to clear', u: 'mm', step: 0.05, min: 0.05, show: (p) => isAround(p) && p.fillIslands, h: 'Leftover strips up to this width are cleared. Wider leftovers are the areas you chose not to clear (max passes) and are left alone. Use at least one spot width.' },
+      { k: 'fillMaxArea', l: 'Largest pocket to clear', u: 'mm²', step: 0.1, min: 0, show: (p) => isAround(p) && p.fillIslands, h: 'Enclosed pockets of leftover resist up to this area are cleared.' },
     ] },
     { title: 'Speed & power', open: true, proc: 'laser', fields: [
       { k: 'feed', l: 'Feed rate', u: 'mm/min', step: 50, min: 1 },
@@ -281,7 +282,7 @@
       ...(state.P.ablateMin > 0 ? [['Below clean-ablation threshold', state.sim.belowLen > 0.5 ? `<span style="color:#ff2bd6">${state.sim.belowLen.toFixed(0)} mm (${((100 * state.sim.belowLen) / Math.max(state.sim.laserLen, 1)).toFixed(0)}%)</span>` : '<span style="color:#35c27a">none</span>']] : []),
       ['Narrow gaps (severe / total)', r.gaps.length ? `<span style="color:#ff6b6b">${r.gaps.filter((g) => g.severe).length}</span> / ${r.gaps.length}` : '0'],
       ['Copper islands', st.islands],
-      ...(state.P.fillIslands && !(state.P.target === 'features') ? [['Leftover islands cleared', st.fillPatches]] : []),
+      ...(state.P.fillIslands && !(state.P.target === 'features') ? [['Leftover islands cleared', st.fillPatches + (st.fillIgnored ? ` (${st.fillIgnored} tiny ignored)` : '')]] : []),
       ['Derated islands', st.derated],
       ['G-code lines', state.gcode.split('\n').length.toLocaleString()],
     ];
