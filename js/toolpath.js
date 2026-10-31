@@ -35,7 +35,8 @@
     passes: 1,
     // isolation
     isoPasses: 2,
-    clearStyle: 'hatch', // clear mode: 'hatch' = scan lines, 'contour' = concentric passes out from the copper edge
+    clearStyle: 'hatch', // clear mode: 'hatch' = scan lines, 'contour' = concentric passes out from the copper edge, 'combo' = contour edge then hatch the inside
+    edgePasses: 2, // clear mode, combo style: contour passes along the edge before the hatch
     contourMax: 8, // clear mode, contour style: most passes from each copper edge (0 = until the area is clear)
     isoOverlap: 0.2,
     fillIslands: true, // hatch away resist strips / specks left between isolation passes
@@ -475,7 +476,7 @@
     };
 
     // hatch away the thin resist strips and specks the passes could not reach, so no stray copper is left
-    const emitFill = (from, used, edge) => {
+    const emitFill = (from, used, edge, extra = []) => {
       const ins = 2 * Math.max(P.beamX, P.beamY); // stay off the edge of the cleared area
       const box = (g) => [
         { X: Math.round((bb.minX - g) * S), Y: Math.round((bb.minY - g) * S) },
@@ -497,6 +498,7 @@
         co.Execute(band, ba * S);
         cov.AddPaths(band.map((l) => l.map((q) => ({ X: q.X, Y: Math.round(q.Y / f) }))), CL.PolyType.ptSubject, true);
       }
+      if (extra.length) cov.AddPaths(extra, CL.PolyType.ptSubject, true); // area another step has already hatched
       const covered = new CL.Paths();
       cov.Execute(CL.ClipType.ctUnion, covered, CL.PolyFillType.pftNonZero, CL.PolyFillType.pftNonZero);
       const left = LG.clip(CL.ClipType.ctDifference, [box(edge - ins)], covered);
@@ -546,33 +548,62 @@
       res.patches = patches;
 
       let cur = [bb.minX, bb.minY];
+      const angles = [P.angle];
+      if (P.crossHatch) angles.push(P.angle + 90);
+      // finish each pad completely before moving to the nearest unfinished one
+      const perPad = (from, fn) => {
+        let at = from;
+        const left = res.islands.slice();
+        while (left.length) {
+          let bi = 0, bd = Infinity;
+          left.forEach((isl, k) => {
+            for (const q of isl.paths[0]) { const d = Math.hypot(q.X / S - at[0], q.Y / S - at[1]); if (d < bd) { bd = d; bi = k; } }
+          });
+          at = fn(at, left.splice(bi, 1)[0]);
+        }
+        return at;
+      };
+      // Nothing outside the copper's bounding box is cleared by the contour styles: that edge is cut away with the
+      // board outline, so the clearing border is ignored for them.
+      const clip = feat ? null : { x0: bb.minX, y0: bb.minY, x1: bb.maxX, y1: bb.maxY };
       if (P.clearStyle === 'contour') {
         // outside in: trace the edge of the cleared area next to the copper, then step away from it until the area
-        // is clear (or `contourMax` passes). Nothing outside the copper's bounding box is cleared: that edge is cut away
-        // with the board outline, so the clearing border is ignored here.
-        const clip = feat ? null : { x0: bb.minX, y0: bb.minY, x1: bb.maxX, y1: bb.maxY };
+        // is clear (or `contourMax` passes)
         let used = 0;
         const maxN = P.contourMax > 0 ? P.contourMax : 400;
         for (let rep = 0; rep < P.passes; rep++) {
-          if (feat) {
-            // finish each pad completely (all its passes, outside in) before moving to the nearest unfinished one
-            const left = res.islands.slice();
-            while (left.length) {
-              let bi = 0, bd = Infinity;
-              left.forEach((isl, k) => {
-                for (const q of isl.paths[0]) { const d = Math.hypot(q.X / S - cur[0], q.Y / S - cur[1]); if (d < bd) { bd = d; bi = k; } }
-              });
-              cur = emitContours(cur, maxN, null, false, left.splice(bi, 1)[0].paths).cur;
-            }
-          } else {
-            const r = emitContours(cur, maxN, clip, false);
-            cur = r.cur; used = r.used;
-          }
+          if (feat) cur = perPad(cur, (at, isl) => emitContours(at, maxN, null, false, isl.paths).cur);
+          else { const r = emitContours(cur, maxN, clip, false); cur = r.cur; used = r.used; }
         }
         if (P.fillIslands && !feat) emitFill(cur, used, 0);
+      } else if (P.clearStyle === 'combo') {
+        // a few contour passes for a clean edge, then hatch the inside. Hatch lines are centred as far in as the last
+        // contour pass, so the overlap holds whichever way the lines run relative to the edge.
+        const n = Math.max(1, Math.round(P.edgePasses)), [hx, hy] = passEll(n - 1);
+        let used = 0, inner = [];
+        for (let rep = 0; rep < P.passes; rep++) {
+          if (feat) {
+            cur = perPad(cur, (at, isl) => {
+              at = emitContours(at, n, null, false, isl.paths).cur;
+              const ps = groups(offsetEll(isl.paths, hx, hy, -1));
+              ps.forEach((q) => (q.s = isl.s));
+              return ps.length ? emitHatch(ps, angles, at) : at;
+            });
+          } else {
+            const r = emitContours(cur, n, clip, false);
+            used = r.used;
+            const box = [
+              { X: Math.round(clip.x0 * S), Y: Math.round(clip.y0 * S) }, { X: Math.round(clip.x1 * S), Y: Math.round(clip.y0 * S) },
+              { X: Math.round(clip.x1 * S), Y: Math.round(clip.y1 * S) }, { X: Math.round(clip.x0 * S), Y: Math.round(clip.y1 * S) },
+            ];
+            inner = LG.clip(CL.ClipType.ctDifference, [box], offsetEll(copper, hx, hy, 1));
+            const ps = groups(inner);
+            ps.forEach((q) => (q.s = 1));
+            cur = ps.length ? emitHatch(ps, angles, r.cur) : r.cur;
+          }
+        }
+        if (P.fillIslands && !feat) emitFill(cur, used, 0, inner);
       } else {
-        const angles = [P.angle];
-        if (P.crossHatch) angles.push(P.angle + 90);
         for (let rep = 0; rep < P.passes; rep++) cur = emitHatch(patches, angles, cur);
       }
     } else {
