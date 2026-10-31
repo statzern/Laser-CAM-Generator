@@ -427,16 +427,20 @@
 
     // concentric passes out from every copper edge (into the features when clearing them), power sampled from
     // influence zones. `clip` {x0,y0,x1,y1} trims passes to a box without tracing its edge. Returns {cur, used}.
-    const emitContours = (from, maxN, clip, setKeep) => {
+    const emitContours = (from, maxN, clip, setKeep, src = copper) => {
       let cur = from, used = 0;
       for (let i = 0; i < maxN; i++) {
         const [px_, py_] = passEll(i);
-        const loops = offsetEll(copper, px_, py_, feat ? -1 : 1);
+        const loops = offsetEll(src, px_, py_, feat ? -1 : 1);
         if (i === 0 && setKeep) res.keepout = loops;
         const before = cuts.length;
-        const items = loops.filter((l) => l.length > 2).map((l) => ({ l, c: [l[0].X / S, l[0].Y / S] }));
-        for (const it of nearestOrder(items, cur)) {
-          const pts = it.l.map((q) => [q.X / S, q.Y / S]);
+        const items = loops.filter((l) => l.length > 2);
+        while (items.length) {
+          // next loop = the one with a vertex nearest the laser; start it at that vertex so travel stays short
+          let bi = 0, bj = 0, bd = Infinity;
+          items.forEach((l, k) => { for (let j = 0; j < l.length; j++) { const d = Math.hypot(l[j].X / S - cur[0], l[j].Y / S - cur[1]); if (d < bd) { bd = d; bi = k; bj = j; } } });
+          const lp = items.splice(bi, 1)[0];
+          const pts = lp.slice(bj).concat(lp.slice(0, bj)).map((q) => [q.X / S, q.Y / S]);
           pts.push(pts[0]);
           let run = null;
           const flushRun = () => { if (run && run.pts.length > 1) cuts.push(run); run = null; };
@@ -542,9 +546,22 @@
         // with the board outline, so the clearing border is ignored here.
         const clip = feat ? null : { x0: bb.minX, y0: bb.minY, x1: bb.maxX, y1: bb.maxY };
         let used = 0;
+        const maxN = P.contourMax > 0 ? P.contourMax : 400;
         for (let rep = 0; rep < P.passes; rep++) {
-          const r = emitContours(cur, P.contourMax > 0 ? P.contourMax : 400, clip, false);
-          cur = r.cur; used = r.used;
+          if (feat) {
+            // finish each pad completely (all its passes, outside in) before moving to the nearest unfinished one
+            const left = res.islands.slice();
+            while (left.length) {
+              let bi = 0, bd = Infinity;
+              left.forEach((isl, k) => {
+                for (const q of isl.paths[0]) { const d = Math.hypot(q.X / S - cur[0], q.Y / S - cur[1]); if (d < bd) { bd = d; bi = k; } }
+              });
+              cur = emitContours(cur, maxN, null, false, left.splice(bi, 1)[0].paths).cur;
+            }
+          } else {
+            const r = emitContours(cur, maxN, clip, false);
+            cur = r.cur; used = r.used;
+          }
         }
         if (P.fillIslands && !feat) emitFill(cur, used, 0);
       } else {

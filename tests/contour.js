@@ -61,4 +61,13 @@ check('leftover fill clears that strip', g2 < 0.05, (100 * g2).toFixed(1) + '% u
 const feat = run({ target: 'features', contourMax: 0 });
 check('features mode: passes stop when the pad is filled', feat.r.cuts.length > 0 && feat.r.cuts.length < 5000, feat.r.cuts.length + ' cuts');
 if (process.env.DBG) console.log(JSON.stringify(Object.entries(globalThis.__bad || {}).sort((a, b) => b[1] - a[1]).slice(0, 25)));
+// each pad is finished before the next one starts: the cuts must not return to a pad they already left
+{
+  const isl = feat.r.islands;
+  const which = (c) => isl.findIndex((i) => LG.pointInPaths(c.pts[0][0], c.pts[0][1], i.paths) || i.paths[0].some((q) => Math.hypot(q.X / 1e4 - c.pts[0][0], q.Y / 1e4 - c.pts[0][1]) < 0.3));
+  const seq = feat.r.cuts.map(which).filter((v) => v >= 0), seen = new Set();
+  let returns = 0, prev = -1;
+  for (const v of seq) { if (v !== prev && seen.has(v)) returns++; seen.add(v); prev = v; }
+  check('features mode: one pad at a time (no returns to a finished pad)', returns === 0 && seen.size === isl.length, `${seen.size} pads, ${returns} returns`);
+}
 process.exit(ok ? 0 : 1);
