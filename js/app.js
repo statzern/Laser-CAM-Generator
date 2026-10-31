@@ -20,11 +20,11 @@
       { k: 'beamY', l: 'Spot height (Y)', u: 'mm', step: 0.005, min: 0.005, h: 'Size of the laser dot across Y. The line it cuts is as wide as the dot is across the direction of travel: the Y size when moving along X, the X size when moving along Y.' },
       { k: 'dirComp', l: 'Scale power with line width', t: 'check', show: (p) => p.process === 'laser' && p.beamX !== p.beamY, h: 'A narrower line concentrates the same energy, so power is scaled to keep the dose per area constant. The widest direction gets the baseline power.' },
       { k: 'clearance', l: 'Extra clearance', u: 'mm', step: 0.01, min: 0, h: 'Additional standoff from the feature edge so the laser does not nibble it.' },
-      { k: 'margin', l: 'Clear border', u: 'mm', step: 0.5, min: 0, show: (p) => isClear(p) && isAround(p), h: 'How far past the copper bounding box to clear. With contour clearing the passes stop here and the border itself is not traced.' },
+      { k: 'margin', l: 'Clear border', u: 'mm', step: 0.5, min: 0, show: (p) => isClear(p) && isAround(p) && p.clearStyle !== 'contour', h: 'How far past the copper bounding box to clear. Contour clearing never clears outside the copper edge, so this only applies to hatching.' },
       { k: 'passes', l: 'Repeat passes', u: '×', step: 1, min: 1 },
     ] },
     { title: 'Clearing', open: true, proc: 'laser', show: isClear, fields: [
-      { k: 'clearStyle', l: 'Clear with', t: 'select', o: [['hatch', 'Hatch lines'], ['contour', 'Contours (outside in)']], h: 'Contours trace the edge of the cleared area next to the copper first, then add passes stepping away from it until the area is clear. The clearing border is not traced.' },
+      { k: 'clearStyle', l: 'Clear with', t: 'select', o: [['hatch', 'Hatch lines'], ['contour', 'Contours (outside in)']], h: 'Contours trace the edge of the cleared area next to the copper first, then add passes stepping away from it until the area is clear. Nothing outside the copper edge is cleared.' },
       { k: 'contourMax', l: 'Max contour passes', step: 1, min: 0, show: (p) => p.clearStyle === 'contour', h: 'Most passes out from each copper edge. Wide areas stop here instead of being cleared completely. 0 = keep going until the area is clear (can be very long).' },
       { k: 'isoOverlap', l: 'Pass overlap', step: 0.05, min: 0, max: 0.9, show: (p) => p.clearStyle === 'contour', h: 'Fraction of the line width shared between concentric passes.' },
       { k: 'angle', l: 'Hatch angle', u: '°', step: 5, h: '0° = lines along X. 90° = along Y.', show: (p) => p.clearStyle === 'hatch' },

@@ -5,7 +5,7 @@ const LG = globalThis.LG;
 const gb = LG.parseGerber('%FSLAX46Y46*%\n%MOMM*%\n%ADD10R,2.0X2.0*%\nD10*\nX5000000Y5000000D03*\nM02*\n');
 let ok = true;
 const check = (name, got, want, tol = 0.003) => { const pass = Math.abs(got - want) <= tol; ok = ok && pass; console.log(pass ? 'ok  ' : 'FAIL', name, got.toFixed(4), 'want', want); };
-const base = { mode: 'isolate', isoPasses: 2, isoOverlap: 0.2, clearance: 0, islandDerate: false, zeroAtCorner: false, passes: 1 };
+const base = { mode: 'isolate', fillIslands: false, isoPasses: 2, isoOverlap: 0.2, clearance: 0, islandDerate: false, zeroAtCorner: false, passes: 1 };
 {
   const P = Object.assign({}, LG.defaults, base, { beamX: 0.04, beamY: 0.08, power: 80, minPower: 0 });
   const r = LG.generate(LG.prepare(gb, P), P);

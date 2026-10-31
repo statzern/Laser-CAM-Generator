@@ -38,7 +38,7 @@
     clearStyle: 'hatch', // clear mode: 'hatch' = scan lines, 'contour' = concentric passes out from the copper edge
     contourMax: 8, // clear mode, contour style: most passes from each copper edge (0 = until the area is clear)
     isoOverlap: 0.2,
-    fillIslands: false, // hatch away resist strips / specks left between isolation passes
+    fillIslands: true, // hatch away resist strips / specks left between isolation passes
     fillWidth: 0.3, // mm, leftover resist strips narrower than this are cleared
     fillMinArea: 0.5, // mm^2, leftover resist regions smaller than this are cleared
     // motion / power
@@ -430,38 +430,39 @@
     const emitContours = (from, maxN, clip, setKeep) => {
       let cur = from, used = 0;
       for (let i = 0; i < maxN; i++) {
-      const [px_, py_] = passEll(i);
-      const loops = offsetEll(copper, px_, py_, feat ? -1 : 1);
-      if (i === 0 && setKeep) res.keepout = loops;
-      const before = cuts.length;
-      const items = loops.filter((l) => l.length > 2).map((l) => ({ l, c: [l[0].X / S, l[0].Y / S] }));
-      for (const it of nearestOrder(items, cur)) {
-        const pts = it.l.map((q) => [q.X / S, q.Y / S]);
-        pts.push(pts[0]);
-        let run = null;
-        const flushRun = () => { if (run && run.pts.length > 1) cuts.push(run); run = null; };
-        for (let j = 1; j < pts.length; j++) {
-          const [x0, y0] = pts[j - 1], [x1, y1] = pts[j];
-          const len = Math.hypot(x1 - x0, y1 - y0);
-          const n = Math.max(1, Math.ceil(len / 0.2));
-          for (let t = 0; t < n; t++) {
-            const ax = x0 + ((x1 - x0) * t) / n, ay = y0 + ((y1 - y0) * t) / n;
-            const bx = x0 + ((x1 - x0) * (t + 1)) / n, by = y0 + ((y1 - y0) * (t + 1)) / n;
-            const mx = (ax + bx) / 2, my = (ay + by) / 2;
-            let s = 1;
-            if (feat) { const isl = islandAt(mx, my); if (isl) s = isl.s; }
-            for (const z of zones) {
-              if (mx < z.bb.x0 || mx > z.bb.x1 || my < z.bb.y0 || my > z.bb.y1) continue;
-              if (z.s < s && pointInPaths(mx, my, z.paths)) s = z.s;
-            }
+        const [px_, py_] = passEll(i);
+        const loops = offsetEll(copper, px_, py_, feat ? -1 : 1);
+        if (i === 0 && setKeep) res.keepout = loops;
+        const before = cuts.length;
+        const items = loops.filter((l) => l.length > 2).map((l) => ({ l, c: [l[0].X / S, l[0].Y / S] }));
+        for (const it of nearestOrder(items, cur)) {
+          const pts = it.l.map((q) => [q.X / S, q.Y / S]);
+          pts.push(pts[0]);
+          let run = null;
+          const flushRun = () => { if (run && run.pts.length > 1) cuts.push(run); run = null; };
+          for (let j = 1; j < pts.length; j++) {
+            const [x0, y0] = pts[j - 1], [x1, y1] = pts[j];
+            const len = Math.hypot(x1 - x0, y1 - y0);
+            const n = Math.max(1, Math.ceil(len / 0.2));
+            for (let t = 0; t < n; t++) {
+              const ax = x0 + ((x1 - x0) * t) / n, ay = y0 + ((y1 - y0) * t) / n;
+              const bx = x0 + ((x1 - x0) * (t + 1)) / n, by = y0 + ((y1 - y0) * (t + 1)) / n;
+              const mx = (ax + bx) / 2, my = (ay + by) / 2;
+              let s = 1;
+              if (feat) { const isl = islandAt(mx, my); if (isl) s = isl.s; }
+              for (const z of zones) {
+                if (mx < z.bb.x0 || mx > z.bb.x1 || my < z.bb.y0 || my > z.bb.y1) continue;
+                if (z.s < s && pointInPaths(mx, my, z.paths)) s = z.s;
+              }
+              if (clip && (mx < clip.x0 || mx > clip.x1 || my < clip.y0 || my > clip.y1)) { flushRun(); continue; }
             const pw = powerFor(s, P) * dirK(P, Math.atan2(y1 - y0, x1 - x0));
-            if (run && Math.abs(run.s - s) < 1e-4 && Math.abs(run.power - pw) < 1.5) run.pts.push([bx, by]);
-            else { flushRun(); run = { pts: [[ax, ay], [bx, by]], power: pw, s }; }
+              if (run && Math.abs(run.s - s) < 1e-4 && Math.abs(run.power - pw) < 1.5) run.pts.push([bx, by]);
+              else { flushRun(); run = { pts: [[ax, ay], [bx, by]], power: pw, s }; }
+            }
           }
+          flushRun();
+          cur = pts[0];
         }
-        flushRun();
-        cur = pts[0];
-      }
         if (!loops.length || (clip && cuts.length === before)) break; // erosion is empty / every pass is outside the box
         used++;
       }
@@ -469,33 +470,39 @@
     };
 
     // hatch away the thin resist strips and specks the passes could not reach, so no stray copper is left
-    const emitFill = (from, used) => {
-      const m = P.margin, ins = 2 * Math.max(P.beamX, P.beamY); // stay off the clearing border
+    const emitFill = (from, used, edge) => {
+      const ins = 2 * Math.max(P.beamX, P.beamY); // stay off the edge of the cleared area
       const box = (g) => [
         { X: Math.round((bb.minX - g) * S), Y: Math.round((bb.minY - g) * S) },
         { X: Math.round((bb.maxX + g) * S), Y: Math.round((bb.minY - g) * S) },
         { X: Math.round((bb.maxX + g) * S), Y: Math.round((bb.maxY + g) * S) },
         { X: Math.round((bb.minX - g) * S), Y: Math.round((bb.maxY + g) * S) },
       ];
-      // what the beam really swept: for pass i, the band between its ellipse scaled by (s_i - 1) and (s_i + 1).
-      // Using the band (not a plain offset) keeps strips where neighbouring passes merged and left a gap.
-      const G = (sc) => offsetEll(copper, Math.max(sc, 0) * ba + cl, Math.max(sc, 0) * bb2 + cl, 1);
+      // what the beam really swept: the actual pass lines, widened by the spot. Where two fronts merge the pass
+      // lines stop, so this (unlike a plain offset of the copper) keeps the strip that is left between them.
+      const f = ba / bb2, co = new CL.ClipperOffset(2, 0.002 * S);
       const cov = new CL.Clipper();
       cov.AddPaths(offsetEll(copper, cl, cl, 1), CL.PolyType.ptSubject, true); // protected standoff
       for (let i = 0; i < used; i++) {
-        const si = sPass(i);
-        cov.AddPaths(LG.clip(CL.ClipType.ctDifference, G(si + 1), G(si - 1)), CL.PolyType.ptSubject, true);
+        const [qx, qy] = passEll(i);
+        const loops = offsetEll(copper, qx, qy, feat ? -1 : 1).filter((l) => l.length > 2);
+        co.Clear();
+        co.AddPaths(loops.map((l) => l.map((q) => ({ X: q.X, Y: Math.round(q.Y * f) }))), CL.JoinType.jtRound, CL.EndType.etClosedLine);
+        const band = new CL.Paths();
+        co.Execute(band, ba * S);
+        cov.AddPaths(band.map((l) => l.map((q) => ({ X: q.X, Y: Math.round(q.Y / f) }))), CL.PolyType.ptSubject, true);
       }
       const covered = new CL.Paths();
       cov.Execute(CL.ClipType.ctUnion, covered, CL.PolyFillType.pftNonZero, CL.PolyFillType.pftNonZero);
-      const left = LG.clip(CL.ClipType.ctDifference, [box(Math.max(m - ins, 0))], covered);
+      const left = LG.clip(CL.ClipType.ctDifference, [box(edge - ins)], covered);
       const w2 = P.fillWidth / 2;
       const opened = offsetPaths(offsetPaths(left, -w2), w2);
       const narrow = LG.clip(CL.ClipType.ctDifference, left, offsetPaths(opened, 0.005));
       const specks = [];
       for (const g of groups(left)) if (g.area < P.fillMinArea) specks.push(...g.paths);
       // grow so a strip thinner than the line spacing still gets a scan line; never into the copper standoff
-      const grow = Math.max(Math.min(P.beamX, P.beamY) / 2, 0.02);
+      const lw0 = lineWidthAt(P, (P.angle * Math.PI) / 180);
+      const grow = Math.max(0.02, P.autoSpacing ? (P.spacingPct / 100) * lw0 : P.spacing); // wide enough that a scan line always lands in it
       const fill = LG.clip(CL.ClipType.ctDifference,
         offsetPaths(LG.clip(CL.ClipType.ctUnion, narrow, specks), grow), offsetEll(copper, rx0, ry0, 1));
       const fp = groups(fill).filter((g) => g.area > 0.002);
@@ -531,14 +538,15 @@
       let cur = [bb.minX, bb.minY];
       if (P.clearStyle === 'contour') {
         // outside in: trace the edge of the cleared area next to the copper, then step away from it until the area
-        // is clear (or `contourMax` passes). The clearing border is not traced: it is cut away with the board edge.
-        const clip = feat ? null : { x0: bb.minX - m, y0: bb.minY - m, x1: bb.maxX + m, y1: bb.maxY + m };
+        // is clear (or `contourMax` passes). Nothing outside the copper's bounding box is cleared: that edge is cut away
+        // with the board outline, so the clearing border is ignored here.
+        const clip = feat ? null : { x0: bb.minX, y0: bb.minY, x1: bb.maxX, y1: bb.maxY };
         let used = 0;
         for (let rep = 0; rep < P.passes; rep++) {
           const r = emitContours(cur, P.contourMax > 0 ? P.contourMax : 400, clip, false);
           cur = r.cur; used = r.used;
         }
-        if (P.fillIslands && !feat) emitFill(cur, used);
+        if (P.fillIslands && !feat) emitFill(cur, used, 0);
       } else {
         const angles = [P.angle];
         if (P.crossHatch) angles.push(P.angle + 90);
@@ -548,7 +556,7 @@
       // isolation: concentric offsets of all copper, power sampled from influence zones
       let cur = [bb.minX, bb.minY];
       for (let rep = 0; rep < P.passes; rep++) cur = emitContours(cur, P.isoPasses, null, true).cur;
-      if (P.fillIslands && !feat) emitFill(cur, P.isoPasses);
+      if (P.fillIslands && !feat) emitFill(cur, P.isoPasses, P.margin);
     }
 
     res.cuts = cuts;

@@ -2,21 +2,22 @@
 globalThis.ClipperLib = require('../vendor/clipper.js');
 for (const f of ['gerber', 'toolpath', 'gcode']) require('../js/' + f + '.js');
 const LG = globalThis.LG;
-// two 2x2 pads 0.30 mm apart (a gap that is not a multiple of the pass step) plus a lone pad
-const gb = LG.parseGerber('%FSLAX46Y46*%\n%MOMM*%\n%ADD10R,2.0X2.0*%\nD10*\nX5000000Y5000000D03*\nX7300000Y5000000D03*\nX5000000Y8000000D03*\nM02*\n');
+// two 2x2 pads 0.30 mm apart (a gap that is not a multiple of the pass step) plus a lone pad, inside a frame
+const gb = LG.parseGerber('%FSLAX46Y46*%\n%MOMM*%\n%ADD10R,2.0X2.0*%\n%ADD11R,0.3X6.6*%\n%ADD12R,6.6X0.3*%\nD10*\nX5000000Y5000000D03*\nX7300000Y5000000D03*\nX5000000Y8000000D03*\nD11*\nX3000000Y6000000D03*\nX9300000Y6000000D03*\nD12*\nX6150000Y3000000D03*\nX6150000Y9000000D03*\nM02*\n');
+// (a copper frame around the pads: contour clearing only works inside the copper's bounding box)
 let ok = true;
 const check = (name, pass, info = '') => { ok = ok && pass; console.log(pass ? 'ok  ' : 'FAIL', name, info); };
-const base = Object.assign({}, LG.defaults, { mode: 'clear', clearStyle: 'contour', beamX: 0.04, beamY: 0.08, clearance: 0.02, margin: 0.6, isoOverlap: 0.2, zeroAtCorner: false, islandDerate: false, passes: 1 });
+const base = Object.assign({}, LG.defaults, { mode: 'clear', clearStyle: 'contour', fillIslands: false, beamX: 0.04, beamY: 0.08, clearance: 0.02, margin: 0.6, isoOverlap: 0.2, zeroAtCorner: false, islandDerate: false, passes: 1 });
 const run = (o) => { const P = Object.assign({}, base, o); return { P, r: LG.generate(LG.prepare(gb, P), P) }; };
 
 const capped = run({ contourMax: 3 });
-const bb = capped.r.bbox, m = base.margin;
-const inBox = capped.r.cuts.every((c) => c.pts.every(([x, y]) => x >= bb.minX - m - 0.25 && x <= bb.maxX + m + 0.25 && y >= bb.minY - m - 0.25 && y <= bb.maxY + m + 0.25));
-check('capped passes stay inside the clearing box', inBox);
+const bb = capped.r.bbox, m = 0;
+const inBox = capped.r.cuts.every((c) => c.pts.every(([x, y]) => x >= bb.minX - 0.25 && x <= bb.maxX + 0.25 && y >= bb.minY - 0.25 && y <= bb.maxY + 0.25));
+check('contour passes never leave the copper bounding box', inBox);
 const full = run({ contourMax: 0 });
 check('unlimited makes more cuts than a cap of 3', full.r.cuts.length > capped.r.cuts.length, `${full.r.cuts.length} vs ${capped.r.cuts.length}`);
 // with the cap, the 3 passes from the first pad's left edge sit at 0.02*(1+2*i*0.8)+0.02 clearance
-const leftXs = [...new Set(capped.r.cuts.flatMap((c) => c.pts).filter(([x, y]) => y > 4.5 && y < 5.5 && x < 4).map(([x]) => +(4 - x).toFixed(3)))].sort((a, b) => a - b);
+const leftXs = [...new Set(capped.r.cuts.flatMap((c) => c.pts).filter(([x, y]) => y > 4.5 && y < 5.5 && x < 4 && x > 3.85).map(([x]) => +(4 - x).toFixed(3)))].sort((a, b) => a - b);
 check('pass offsets from the left edge', leftXs.length === 3 && Math.abs(leftXs[0] - 0.04) < 0.004 && Math.abs(leftXs[1] - (0.02 * 2.6 + 0.02)) < 0.004, leftXs.join(','));
 
 // coverage: rasterise the swept beam and look for uncleared resist away from copper and the border
@@ -35,7 +36,7 @@ function uncovered(P, r, gapOnly) {
       }
     }
   }
-  const pads = [[4, 4, 6, 6], [6.3, 4, 8.3, 6], [4, 7, 6, 9]];
+  const pads = [[4, 4, 6, 6], [6.3, 4, 8.3, 6], [4, 7, 6, 9], [2.85, 2.7, 3.15, 9.3], [9.15, 2.7, 9.45, 9.3], [2.85, 2.85, 9.45, 3.15], [2.85, 8.85, 9.45, 9.15]];
   const near = (x, y, d) => pads.some(([px0, py0, px1, py1]) => x > px0 - d && x < px1 + d && y > py0 - d && y < py1 + d);
   let bad = 0, tot = 0;
   for (let jy = 0; jy < H; jy++) for (let jx = 0; jx < W; jx++) {
@@ -43,7 +44,7 @@ function uncovered(P, r, gapOnly) {
     // only check the gap between the two pads and the ring just around the copper, not the far border
     if (gapOnly) { if (!(x > 6.03 && x < 6.27 && y > 4.1 && y < 5.9)) continue; }
     else if (near(x, y, P.clearance + 0.03) || !near(x, y, 0.45)) continue;
-    tot++; if (!hit[jy * W + jx]) bad++;
+    tot++; if (!hit[jy * W + jx]) { bad++; if (process.env.DBG) (globalThis.__bad = globalThis.__bad || {})[x.toFixed(1) + ',' + y.toFixed(1)] = ((globalThis.__bad || {})[x.toFixed(1) + ',' + y.toFixed(1)] || 0) + 1; }
   }
   return bad / tot;
 }
@@ -59,4 +60,5 @@ check('leftover fill clears that strip', g2 < 0.05, (100 * g2).toFixed(1) + '% u
 // clearing the features (mask openings): passes erode inward and stop on their own
 const feat = run({ target: 'features', contourMax: 0 });
 check('features mode: passes stop when the pad is filled', feat.r.cuts.length > 0 && feat.r.cuts.length < 5000, feat.r.cuts.length + ' cuts');
+if (process.env.DBG) console.log(JSON.stringify(Object.entries(globalThis.__bad || {}).sort((a, b) => b[1] - a[1]).slice(0, 25)));
 process.exit(ok ? 0 : 1);
