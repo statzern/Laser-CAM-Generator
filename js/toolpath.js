@@ -19,12 +19,16 @@
     mode: 'clear', // 'clear' | 'isolate'
     target: 'around', // 'around' = clear around the features (copper); 'features' = remove the features (mask / paste)
     // geometry
-    beam: 0.1, // mm, kerf / spot diameter
+    beamX: 0.04, // mm, spot size across X (the dot is an ellipse; a round spot has beamX = beamY)
+    beamY: 0.08, // mm, spot size across Y
+    dirComp: true, // scale power with the line width the spot cuts in the travel direction (constant dose)
     clearance: 0.05, // mm, extra standoff from copper edge
     margin: 1.0, // mm, clearing border around copper bbox
     // hatching
     angle: 0, // deg
     spacing: 0.08, // mm
+    autoSpacing: true, // spacing = spacingPct % of the line width at the hatch angle
+    spacingPct: 80,
     crossHatch: false,
     direction: 'serpentine', // 'serpentine' | 'forward' | 'reverse'
     interleave: 1, // process every Nth line, then the next offset (cool-down)
@@ -73,6 +77,29 @@
     co.Execute(sol, deltaMm * S);
     return sol;
   }
+
+  /**
+   * Offset by an ellipse with semi-axes rx (X) and ry (Y); `sign` < 0 erodes. An affine map commutes with
+   * Minkowski sums, so scale Y until the ellipse is a circle, offset by it, and scale back.
+   */
+  function offsetEll(paths, rx, ry, sign) {
+    if (!paths.length) return [];
+    const d = sign < 0 ? -1 : 1;
+    if (Math.abs(rx - ry) < 1e-9) return offsetPaths(paths, d * rx);
+    const f = rx / ry;
+    const sc = (ps, k) => ps.map((p) => p.map((q) => ({ X: q.X, Y: Math.round(q.Y * k) })));
+    return sc(offsetPaths(sc(paths, f), d * rx), 1 / f);
+  }
+  LG.offsetEll = offsetEll;
+
+  /** Width of the line the elliptical spot cuts when travelling at angle th (rad): its extent perpendicular to travel. */
+  const lineWidthAt = (P, th) => {
+    const a = P.beamX / 2, b = P.beamY / 2;
+    return 2 * Math.sqrt(a * a * Math.sin(th) ** 2 + b * b * Math.cos(th) ** 2);
+  };
+  LG.lineWidthAt = lineWidthAt;
+  /** Power multiplier that keeps energy per unit area constant: narrower lines concentrate the same energy. */
+  const dirK = (P, th) => (P.dirComp ? lineWidthAt(P, th) / Math.max(P.beamX, P.beamY) : 1);
 
   /** Group a polygon set into islands: outer contour + holes, with net area. */
   function groups(paths) {
@@ -129,10 +156,11 @@
    * (the tool cannot fit at all); the rest could be resolved by reducing the extra clearance.
    * Returns [{x, y, gap, severe}] sorted narrowest first (gap in mm, measured at the widest point).
    */
-  LG.findNarrowGaps = function (copper, T, Wt) {
+  LG.findNarrowGaps = function (copper, T, Wt, opt) {
     if (!copper.length || T <= 0) return [];
-    const r = Math.max(T / 2 - 0.002, 0.001);
-    const closed = offsetPaths(offsetPaths(copper, r), -r); // morphological closing fills gaps < T
+    // opt = {rx, ry, wx, wy}: per-axis reach (spot semi-axis + clearance) and spot width, for an elliptical spot
+    const rx = Math.max(((opt && opt.rx) || T / 2) - 0.002, 0.001), ry = Math.max(((opt && opt.ry) || T / 2) - 0.002, 0.001);
+    const closed = offsetEll(offsetEll(copper, rx, ry, 1), rx, ry, -1); // directional closing fills gaps the spot cannot enter
     const prob = LG.clip(CL.ClipType.ctDifference, closed, offsetPaths(copper, 0.01)); // drop corner slivers
     const segs = [];
     for (const p of copper) for (let i = 0; i < p.length; i++) {
@@ -162,7 +190,9 @@
         const x = bb.x0 + ((bb.x1 - bb.x0) * i) / N, y = bb.y0 + ((bb.y1 - bb.y0) * j) / N;
         if (pointInPaths(x, y, g.paths)) gap = Math.max(gap, 2 * distToCopper(x, y));
       }
-      out.push({ x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2, gap, severe: gap < Wt });
+      // a strip wider than tall separates features vertically, so the spot's Y extent is what has to fit
+      const wide = opt && opt.wx && opt.wy ? (bb.y1 - bb.y0 <= bb.x1 - bb.x0 ? opt.wy : opt.wx) : Wt;
+      out.push({ x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2, gap, severe: gap < wide });
     }
     return out.sort((a, b) => a.gap - b.gap).slice(0, 300);
   };
@@ -311,14 +341,18 @@
     const t0 = performance.now ? performance.now() : Date.now();
     const copper = gb.paths;
     const bb = gb.bbox;
-    const d0 = P.beam / 2 + P.clearance;
+    const ba = P.beamX / 2, bb2 = P.beamY / 2, cl = P.clearance;
+    const rx0 = ba + cl, ry0 = bb2 + cl; // reach of the first pass from the copper edge, per axis
+    const d0 = Math.max(rx0, ry0);
+    const sPass = (i) => 1 + 2 * i * (1 - P.isoOverlap); // ellipse scale of pass i: steps by the line width in every direction
+    const passEll = (i) => [sPass(i) * ba + cl, sPass(i) * bb2 + cl];
     const res = { stats: {}, fillRegion: [], copper, bbox: bb, cuts: [], zones: [], islands: [], patches: [], keepout: [], clearRegion: [], warnings: [] };
 
     // --- islands & influence zones -------------------------------------------------
     res.islands = groups(copper);
     const feat = P.target === 'features';
     res.gapT = 2 * d0;
-    res.gaps = feat ? [] : LG.findNarrowGaps(copper, res.gapT, P.beam);
+    res.gaps = feat ? [] : LG.findNarrowGaps(copper, res.gapT, Math.max(P.beamX, P.beamY), { rx: rx0, ry: ry0, wx: P.beamX, wy: P.beamY });
     const zones = [];
     // power scale of the feature (island) that contains a point; used when the features themselves are cleared
     const islandAt = (x, y) => res.islands.find((i) => pointInPaths(x, y, i.paths));
@@ -347,7 +381,10 @@
     const emitHatch = (patches, angles, from) => {
       let cur = from;
       for (const ang of angles) {
-        const hp = hatchPatches(patches, zones, ang, P.spacing, P);
+        const th = (ang * Math.PI) / 180, lw = lineWidthAt(P, th), k = dirK(P, th);
+        const sp = P.autoSpacing ? Math.max(0.005, (P.spacingPct / 100) * lw) : P.spacing;
+        if (!P.autoSpacing && sp > lw * 1.001) res.warnings.push(`Line spacing ${sp} mm is wider than the ${lw.toFixed(3)} mm line the spot cuts at ${ang}°: resist ridges will be left between lines.`);
+        const hp = hatchPatches(patches, zones, ang, sp, P);
         const items = hp.map((h, i) => {
           const r = h.recs[0];
           const c = r ? h.back(r.a, r.v) : [0, 0];
@@ -374,7 +411,7 @@
             const pcs = rev ? rec.pieces.slice().reverse() : rec.pieces;
             for (const pc of pcs) {
               const pa = rev ? pc.b : pc.a, pb = rev ? pc.a : pc.b;
-              cuts.push({ pts: [back(pa, rec.v), back(pb, rec.v)], power: powerFor(pc.s, P), s: pc.s });
+              cuts.push({ pts: [back(pa, rec.v), back(pb, rec.v)], power: powerFor(pc.s, P) * k, s: pc.s });
             }
           });
           const last = cuts[cuts.length - 1];
@@ -386,7 +423,7 @@
 
 
     if (P.mode === 'clear') {
-      res.keepout = feat ? [] : offsetPaths(copper, d0);
+      res.keepout = feat ? [] : offsetEll(copper, rx0, ry0, 1);
       const m = P.margin;
       const rect = [
         { X: Math.round((bb.minX - m) * S), Y: Math.round((bb.minY - m) * S) },
@@ -395,7 +432,7 @@
         { X: Math.round((bb.minX - m) * S), Y: Math.round((bb.maxY + m) * S) },
       ];
       // 'features': the cleared area is the features, pulled in so the beam edge lands on the feature boundary
-      res.clearRegion = feat ? offsetPaths(copper, -d0) : LG.clip(CL.ClipType.ctDifference, [rect], res.keepout);
+      res.clearRegion = feat ? offsetEll(copper, rx0, ry0, -1) : LG.clip(CL.ClipType.ctDifference, [rect], res.keepout);
       const patches = groups(res.clearRegion);
       patches.forEach((p) => {
         if (feat) {
@@ -412,12 +449,11 @@
       for (let rep = 0; rep < P.passes; rep++) cur = emitHatch(patches, angles, cur);
     } else {
       // isolation: concentric offsets of all copper, power sampled from influence zones
-      const step = P.beam * (1 - P.isoOverlap);
       let cur = [bb.minX, bb.minY];
       for (let rep = 0; rep < P.passes; rep++) {
         for (let i = 0; i < P.isoPasses; i++) {
-          const d = d0 + i * step;
-          const loops = offsetPaths(copper, feat ? -d : d);
+          const [px_, py_] = passEll(i);
+          const loops = offsetEll(copper, px_, py_, feat ? -1 : 1);
           if (i === 0) res.keepout = loops;
           const items = loops.filter((l) => l.length > 2).map((l) => ({ l, c: [l[0].X / S, l[0].Y / S] }));
           for (const it of nearestOrder(items, cur)) {
@@ -439,8 +475,9 @@
                   if (mx < z.bb.x0 || mx > z.bb.x1 || my < z.bb.y0 || my > z.bb.y1) continue;
                   if (z.s < s && pointInPaths(mx, my, z.paths)) s = z.s;
                 }
-                if (run && Math.abs(run.s - s) < 1e-4) run.pts.push([bx, by]);
-                else { flushRun(); run = { pts: [[ax, ay], [bx, by]], power: powerFor(s, P), s }; }
+                const pw = powerFor(s, P) * dirK(P, Math.atan2(y1 - y0, x1 - x0));
+                if (run && Math.abs(run.s - s) < 1e-4 && Math.abs(run.power - pw) < 1.5) run.pts.push([bx, by]);
+                else { flushRun(); run = { pts: [[ax, ay], [bx, by]], power: pw, s }; }
               }
             }
             flushRun();
@@ -450,7 +487,7 @@
       }
       if (P.fillIslands && !feat) {
         // resist the passes cannot reach: everything farther than the outer pass edge from any copper
-        const reach = d0 + (P.isoPasses - 1) * step + P.beam / 2;
+        const sl = sPass(P.isoPasses - 1) + 1; // outer beam edge of the last pass: its ellipse plus the spot itself
         const m = P.margin;
         const rect = [
           { X: Math.round((bb.minX - m) * S), Y: Math.round((bb.minY - m) * S) },
@@ -458,7 +495,7 @@
           { X: Math.round((bb.maxX + m) * S), Y: Math.round((bb.maxY + m) * S) },
           { X: Math.round((bb.minX - m) * S), Y: Math.round((bb.maxY + m) * S) },
         ];
-        const left = LG.clip(CL.ClipType.ctDifference, [rect], offsetPaths(copper, reach));
+        const left = LG.clip(CL.ClipType.ctDifference, [rect], offsetEll(copper, sl * ba + cl, sl * bb2 + cl, 1));
         const w2 = P.fillWidth / 2;
         const opened = offsetPaths(offsetPaths(left, -w2), w2);
         const narrow = LG.clip(CL.ClipType.ctDifference, left, offsetPaths(opened, 0.005));
@@ -467,7 +504,7 @@
         // grow so a strip thinner than the line spacing still gets a scan line; never into the copper standoff
         const grow = Math.max(P.spacing / 2, 0.02);
         const fill = LG.clip(CL.ClipType.ctDifference,
-          offsetPaths(LG.clip(CL.ClipType.ctUnion, narrow, specks), grow), offsetPaths(copper, d0));
+          offsetPaths(LG.clip(CL.ClipType.ctUnion, narrow, specks), grow), offsetEll(copper, rx0, ry0, 1));
         const fp = groups(fill).filter((g) => g.area > 0.002);
         fp.forEach((g) => (g.s = 1));
         res.fillRegion = fp.flatMap((g) => g.paths);

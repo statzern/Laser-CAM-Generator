@@ -9,7 +9,7 @@
     const st = res.stats;
     out.push('; Laser Gen');
     if (meta && meta.name) out.push('; source: ' + meta.name);
-    out.push(`; mode=${P.mode} beam=${P.beam} spacing=${P.spacing} angle=${P.angle} dir=${P.direction} interleave=${P.interleave} passes=${P.passes}`);
+    out.push(`; mode=${P.mode} beam=${P.beamX}x${P.beamY} spacing=${P.spacing} angle=${P.angle} dir=${P.direction} interleave=${P.interleave} passes=${P.passes}`);
     out.push(`; feed=${P.feed} power=${P.power}% min=${P.minPower}% areaRef=${P.areaRef}mm2 exp=${P.areaExp} influence=${P.influence}mm`);
     out.push(`; est. time ${st.minutes.toFixed(1)} min, cut ${st.cutLen.toFixed(0)} mm, power ${st.pMin.toFixed(0)}-${st.pMax.toFixed(0)}% (mean ${st.pMean.toFixed(0)}%)`);
     for (const l of P.header.split('\n')) if (l.trim()) out.push(l.trim());

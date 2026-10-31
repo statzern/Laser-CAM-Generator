@@ -6,7 +6,7 @@ const gb = LG.parseGerber(fs.readFileSync(process.argv[2], 'utf8'));
 console.log('parse warnings:', gb.warnings, '| bbox', Object.values(gb.bbox).map((v) => v.toFixed(1)).join(' '));
 const P = Object.assign({}, LG.defaults, { mode: 'isolate', passes: 1, isoPasses: 1 });
 const g = LG.prepare(gb, P), r = LG.generate(g, P);
-const d0 = P.beam / 2 + P.clearance;
+const d0 = Math.max(P.beamX, P.beamY) / 2 + P.clearance;
 console.log(`params: baseline ${P.power}% min ${P.minPower}% areaRef ${P.areaRef} mm2 exp ${P.areaExp} influence ${P.influence} mm | d0 ${d0}`);
 console.log('islands', r.islands.length, '| derated', r.zones.length, '| cuts', r.cuts.length, '| power range', r.stats.pMin.toFixed(0) + '-' + r.stats.pMax.toFixed(0));
 const isl = r.islands.map((i, k) => { const bb = i.paths[0].reduce((a, q) => [Math.min(a[0], q.X / S), Math.min(a[1], q.Y / S), Math.max(a[2], q.X / S), Math.max(a[3], q.Y / S)], [1e9, 1e9, -1e9, -1e9]); return { k, area: i.area, s: i.s, bb }; });

@@ -16,14 +16,18 @@
     { title: 'Job', open: true, proc: 'laser', fields: [
       { k: 'mode', l: 'Mode', t: 'select', o: [['clear', 'Clear copper (area hatch)'], ['isolate', 'Isolation contours']] },
       { k: 'target', l: 'Clear target', t: 'select', o: [['around', 'Around the features (copper layer)'], ['features', 'The features (solder mask / paste)']], h: 'Mask and paste files: the openings / pads are what gets removed.' },
-      { k: 'beam', l: 'Beam / kerf width', u: 'mm', step: 0.01, min: 0.01, h: 'Spot size on the work. The path stays beam/2 + clearance away from the feature edge (outside it, or inside when clearing the features).' },
+      { k: 'beamX', l: 'Spot width (X)', u: 'mm', step: 0.005, min: 0.005, h: 'Size of the laser dot across X. The dot is treated as an ellipse; set both sizes equal for a round dot.' },
+      { k: 'beamY', l: 'Spot height (Y)', u: 'mm', step: 0.005, min: 0.005, h: 'Size of the laser dot across Y. The line it cuts is as wide as the dot is across the direction of travel: the Y size when moving along X, the X size when moving along Y.' },
+      { k: 'dirComp', l: 'Scale power with line width', t: 'check', show: (p) => p.process === 'laser' && p.beamX !== p.beamY, h: 'A narrower line concentrates the same energy, so power is scaled to keep the dose per area constant. The widest direction gets the baseline power.' },
       { k: 'clearance', l: 'Extra clearance', u: 'mm', step: 0.01, min: 0, h: 'Additional standoff from the feature edge so the laser does not nibble it.' },
       { k: 'margin', l: 'Clear border', u: 'mm', step: 0.5, min: 0, show: (p) => isClear(p) && isAround(p), h: 'How far past the copper bounding box to clear.' },
       { k: 'passes', l: 'Repeat passes', u: '×', step: 1, min: 1 },
     ] },
     { title: 'Hatch / clearing', open: true, proc: 'laser', show: isClear, fields: [
       { k: 'angle', l: 'Hatch angle', u: '°', step: 5, h: '0° = lines along X. 90° = along Y.' },
-      { k: 'spacing', l: 'Line spacing', u: 'mm', step: 0.01, min: 0.01, h: 'Normally 60–90 % of beam width for solid clearing.' },
+      { k: 'autoSpacing', l: 'Spacing from line width', t: 'check', h: 'Sets the spacing as a percentage of the line width the dot cuts at the hatch angle. With a narrow dot, 0° (along X) cuts the wider line and needs fewer passes.' },
+      { k: 'spacingPct', l: 'Spacing', u: '% of line', step: 5, min: 10, max: 100, show: (p) => p.autoSpacing, h: 'Normally 60–90 % for solid clearing.' },
+      { k: 'spacing', l: 'Line spacing', u: 'mm', step: 0.01, min: 0.01, show: (p) => !p.autoSpacing, h: 'Keep this at or below the line width at the hatch angle, normally 60–90 % of it.' },
       { k: 'crossHatch', l: 'Cross-hatch (+90° pass)', t: 'check' },
       { k: 'direction', l: 'Directionality', t: 'select', o: [['serpentine', 'Serpentine (bidirectional)'], ['forward', 'One-way, low→high'], ['reverse', 'One-way, high→low']], h: 'One-way keeps heat/kerf uniform at the cost of rapids.' },
       { k: 'interleave', l: 'Line interleave', u: '×', step: 1, min: 1, h: 'N = burn every Nth line first, then fill in. Gives each area time to cool.' },
@@ -207,6 +211,7 @@
       buildCache(); runSim();
       for (const w of state.gb.warnings) add(w);
       for (const w of state.sim.warnings) add('G-code: ' + w);
+      res.warnings.forEach((w) => add(w));
       LG.gapWarnings(res.gaps, res.gapT).forEach((w) => add(w));
       if (P.ablateMin > 0) {
         if (P.power < P.ablateMin) add(`Baseline power (${P.power}%) is below the clean-ablation threshold (${P.ablateMin}%): the resist may not clear anywhere.`);
@@ -426,10 +431,10 @@
       if (state.layers.rapid) { ctx.strokeStyle = 'rgba(200,200,200,.35)'; ctx.lineWidth = px; ctx.setLineDash([3 * px, 3 * px]); ctx.stroke(pc.rap); ctx.setLineDash([]); }
       if (sim.kind === 'laser') {
         if (state.layers.path) {
-          ctx.lineWidth = Math.max(state.P.beam, 1.1 * px);
+          ctx.lineWidth = Math.max(Math.max(state.P.beamX, state.P.beamY), 1.1 * px);
           ctx.strokeStyle = 'rgba(150,150,160,.35)'; ctx.stroke(pc.off);
           pc.bk.forEach((b, i) => { ctx.strokeStyle = colorFor(pc.lo + ((pc.hi - pc.lo) * i) / (NB - 1), pc.lo, pc.hi); ctx.stroke(b); });
-          if (sim.thr) { ctx.strokeStyle = '#ff2bd6'; ctx.lineWidth = Math.max(state.P.beam * 0.5, 1.4 * px); ctx.stroke(pc.below); }
+          if (sim.thr) { ctx.strokeStyle = '#ff2bd6'; ctx.lineWidth = Math.max(Math.max(state.P.beamX, state.P.beamY) * 0.5, 1.4 * px); ctx.stroke(pc.below); }
         }
       } else {
         const W = state.jobW || {};
@@ -447,7 +452,7 @@
       // the segment currently being executed, then the head
       const at = LG.simAt(sim, state.tNow);
       if (at && idx < sim.n && at.u > 0) {
-        ctx.strokeStyle = at.rapid ? '#aaa' : '#fff'; ctx.lineWidth = Math.max(sim.kind === 'laser' ? state.P.beam : 0.3, 1.5 * px);
+        ctx.strokeStyle = at.rapid ? '#aaa' : '#fff'; ctx.lineWidth = Math.max(sim.kind === 'laser' ? Math.max(state.P.beamX, state.P.beamY) : 0.3, 1.5 * px);
         ctx.beginPath(); ctx.moveTo(sim.X0[at.i], sim.Y0[at.i]); ctx.lineTo(at.x, at.y); ctx.stroke();
       }
       ctx.lineCap = 'butt';
